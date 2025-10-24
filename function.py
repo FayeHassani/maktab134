@@ -1,59 +1,108 @@
 from db_connect import PostgresConnection
 
 class TicketManager:
-    def __init__(self, db):
+    def __init__(self, db: PostgresConnection):
         self.db = db
 
+    # ---buy ticket ---
     def buy_ticket(self, user_id, bus_id, seat_id, price):
         try:
-            # Check wallet
-            result = self.db.fetch_one("SELECT wallet FROM users WHERE user_id = %s", (user_id,))
-            if not result:
+            self.db.cur.execute("BEGIN;")
+            wallet = self.db.fetch_one("SELECT wallet FROM users WHERE user_id = %s FOR UPDATE;", (user_id,))
+            if not wallet:
                 print("User not found!")
+                self.db.rollback()
                 return False
 
-            wallet = float(result[0])
+            wallet = float(wallet[0])
             if wallet < price:
-                print("Insufficient wallet balance!")
+                print("Insufficient balance!")
+                self.db.rollback()
                 return False
 
-            # Check seat availability
-            result = self.db.fetch_one("SELECT is_booked FROM seats WHERE seat_id = %s", (seat_id,))
-            if not result:
-                print("Seat not found!")
-                return False
-            if result[0]:
-                print("Seat already booked!")
+            seat = self.db.fetch_one("SELECT is_booked FROM seats WHERE seat_id = %s FOR UPDATE;", (seat_id,))
+            if not seat or seat[0]:
+                print("Seat already booked or not found!")
+                self.db.rollback()
                 return False
 
-            # Reserve seat
-            if not self.db.execute_query("UPDATE seats SET is_booked = TRUE WHERE seat_id = %s", (seat_id,)):
-                print("Failed to reserve seat!")
-                return False
-
-            # Deduct wallet
-            if not self.db.execute_query("UPDATE users SET wallet = wallet - %s WHERE user_id = %s", (price, user_id)):
-                self.db.execute_query("UPDATE seats SET is_booked = FALSE WHERE seat_id = %s", (seat_id,))
-                print("Payment failed!")
-                return False
-            self.db.commit()
-
-            # Create ticket
-            if not self.db.execute_query("INSERT INTO tickets (user_id, bus_id, seat_id, price) VALUES (%s,%s,%s,%s)",
-                                         (user_id, bus_id, seat_id, price)):
-                self.db.execute_query("UPDATE seats SET is_booked = FALSE WHERE seat_id = %s", (seat_id,))
-                self.db.commit()
-                print("Failed to create ticket!")
-                return False
+            # reserve seat
+            self.db.execute_query("UPDATE seats SET is_booked = TRUE WHERE seat_id = %s;", (seat_id,))
+            #update wallet
+            self.db.execute_query("UPDATE users SET wallet = wallet - %s WHERE user_id = %s;", (price, user_id))
+            # transition
+            self.db.execute_query("INSERT INTO transactions (user_id, type, amount) VALUES (%s, %s, %s);",
+                                  (user_id, "TICKET_PURCHASE", price))
+            # tickrt
+            self.db.execute_query(
+                "INSERT INTO tickets (user_id, bus_id, seat_id, price, status) VALUES (%s, %s, %s, %s, 'PAID');",
+                (user_id, bus_id, seat_id, price)
+            )
+            # log
+            self.db.log_action(user_id, f"Purchased ticket for bus_id={bus_id}, seat_id={seat_id}")
 
             self.db.commit()
             print(f"Ticket purchased successfully! Remaining wallet: ${wallet - price:.2f}")
             return True
-
         except Exception as e:
-            self.db.con.rollback()
+            self.db.rollback()
             print(f"Error buying ticket: {e}")
             return False
+
+    # --- cancel tichet
+    def cancel_ticket(self, user_id, ticket_id, refund_percent=80):
+        try:
+            ticket = self.db.fetch_one("SELECT status, price, seat_id, bus_id FROM tickets WHERE ticket_id=%s AND user_id=%s;",
+                                       (ticket_id, user_id))
+            if not ticket:
+                print("Ticket not found!")
+                return False
+
+            status, price, seat_id, bus_id = ticket
+            if status != "PAID":
+                print("Ticket cannot be cancelled!")
+                return False
+
+            # بروزرسانی وضعیت بلیط
+            self.db.execute_query("UPDATE tickets SET status='CANCELLED' WHERE ticket_id=%s;", (ticket_id,))
+            # آزاد کردن صندلی
+            self.db.execute_query("UPDATE seats SET is_booked=FALSE WHERE seat_id=%s;", (seat_id,))
+            # برگشت وجه با درصد مشخص
+            refund_amount = price * (refund_percent / 100)
+            self.db.execute_query("UPDATE users SET wallet = wallet + %s WHERE user_id=%s;", (refund_amount, user_id))
+            # ثبت تراکنش برگشت وجه
+            self.db.execute_query("INSERT INTO transactions (user_id, type, amount) VALUES (%s, %s, %s);",
+                                  (user_id, "REFUND", refund_amount))
+            # لاگ
+            self.db.log_action(user_id, f"Cancelled ticket_id={ticket_id}, refund={refund_amount}")
+
+            self.db.commit()
+            print(f"Ticket cancelled! ${refund_amount:.2f} refunded to wallet.")
+            return True
+        except Exception as e:
+            self.db.rollback()
+            print(f"Error cancelling ticket: {e}")
+            return False
+
+    # --- گزارش ها ---
+    def get_reports(self, bus_id=None):
+        try:
+            if bus_id:
+                # درآمد و تعداد بلیط برای یک سفر
+                result = self.db.fetch_one(
+                    "SELECT COUNT(*), SUM(price) FROM tickets WHERE bus_id=%s AND status='PAID';", (bus_id,))
+                count, revenue = result if result else (0, 0)
+                return {"tickets_sold": count, "revenue": float(revenue or 0)}
+            else:
+                # کل درآمد و تعداد بلیط
+                result = self.db.fetch_one(
+                    "SELECT COUNT(*), SUM(price) FROM tickets WHERE status='PAID';")
+                count, revenue = result if result else (0, 0)
+                return {"tickets_sold": count, "revenue": float(revenue or 0)}
+        except Exception as e:
+            print(f"Error fetching reports: {e}")
+            return {"tickets_sold": 0, "revenue": 0}
+
 
     def get_user_tickets(self, user_id):
         try:

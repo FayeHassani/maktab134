@@ -28,104 +28,47 @@ class Admin(User):
     def __str__(self):
         return f"Admin(name: {self.name}, email: {self.email})"
 
+from db_connect import PostgresConnection
+from main import Customer, Admin, User
 
 class UserManager:
-    def __init__(self, db):
+    def __init__(self, db: PostgresConnection):
         self.db = db
 
     def register_user(self, name, email, password):
-        try:
-            query = "SELECT * FROM users WHERE email = %s"
-            result = self.db.fetch_one(query, (email,))
-            if result:
-                print("Email already exists!")
-                return False
-
-            query = "INSERT INTO users (name, email, password, is_admin, wallet) VALUES (%s, %s, %s, %s, %s)"
-            success = self.db.execute_query(query, (name, email, password, False, 0.0))
-            if success:
-                self.db.commit()
-                print(f"User {name} registered successfully!")
-                return True
-            else:
-                print("Failed! Try again!")
-                return False
-        except Exception as e:
-            print(f"Registering user failed: {e}")
+        result = self.db.fetch_one("SELECT * FROM users WHERE email=%s;", (email,))
+        if result:
+            print("Email already exists!")
             return False
+        self.db.execute_query("INSERT INTO users (name,email,password,is_admin,wallet) VALUES (%s,%s,%s,%s,%s);",
+                              (name, email, password, False, 0))
+        # ثبت لاگ
+        user = self.db.fetch_one("SELECT user_id FROM users WHERE email=%s;", (email,))
+        if user:
+            self.db.log_action(user[0], f"Registered new user {email}")
+        self.db.commit()
+        print(f"User {name} registered successfully!")
+        return True
 
     def login_user(self, email, password):
-        try:
-            query = "SELECT user_id, name, email, password, wallet, is_admin FROM users WHERE email = %s"
-            result = self.db.fetch_one(query, (email,))
-            if not result:
-                print("User not found!")
-                return None
-
-            user_id, name, db_email, db_password, wallet, is_admin = result
-            if db_password != password:
-                print("Wrong password! Please try again!")
-                return None
-            else:
-                if is_admin:
-                    return Admin(user_id, name, db_email, db_password, wallet)
-                else:
-                    return Customer(user_id, name, db_email, db_password, wallet)
-        except Exception as e:
-            print(f"Login failed: {e}")
+        result = self.db.fetch_one("SELECT user_id,name,email,password,wallet,is_admin FROM users WHERE email=%s;", (email,))
+        if not result:
+            print("User NOT found!")
             return None
-
-    def delete_user(self, user_id):
-        try:
-            query = "DELETE FROM users WHERE user_id = %s AND is_admin = FALSE"
-            success = self.db.execute_query(query, (user_id,))
-            if success:
-                self.db.commit()
-                print("User deleted successfully!")
-                return True
-            else:
-                print("Failed to delete user!")
-                return False
-        except Exception as e:
-            print(f"Error deleting user: {e}")
-            return False
+        user_id, name, db_email, db_password, wallet, is_admin = result
+        if db_password != password:
+            print("Wrong password!")
+            return None
+        if is_admin:
+            return Admin(user_id, name, db_email, db_password, wallet)
+        else:
+            return Customer(user_id, name, db_email, db_password, wallet)
 
     def update_wallet(self, user_id, amount):
-        try:
-            query = "UPDATE users SET wallet = wallet + %s WHERE user_id = %s"
-            success = self.db.execute_query(query, (amount, user_id))
-            if success:
-                self.db.commit()
-                return True
-            else:
-                return False
-        except Exception as e:
-            print(f"Error updating wallet: {e}")
-            return False
+        self.db.execute_query("UPDATE users SET wallet = wallet + %s WHERE user_id=%s;", (amount, user_id))
+        self.db.execute_query("INSERT INTO transactions (user_id,type,amount) VALUES (%s,%s,%s);",
+                              (user_id, "WALLET_TOPUP", amount))
+        self.db.log_action(user_id, f"Wallet topped up by {amount}")
+        self.db.commit()
+        return True
 
-    def get_wallet(self, user_id):
-        try:
-            query = "SELECT wallet FROM users WHERE user_id = %s"
-            result = self.db.fetch_one(query, (user_id,))
-            return float(result[0]) if result else 0.0
-        except Exception as e:
-            print(f"Error getting wallet: {e}")
-            return 0.0
-
-    def get_all_users(self):
-        try:
-            query = "SELECT user_id, name, email, wallet, is_admin FROM users WHERE is_admin = FALSE"
-            results = self.db.fetch_all(query)
-            users = []
-            for row in results:
-                user_id, name, email, wallet, is_admin = row
-                users.append({
-                    "user_id": user_id,
-                    "name": name,
-                    "email": email,
-                    "wallet": float(wallet)
-                })
-            return users
-        except Exception as e:
-            print(f"Error fetching users: {e}")
-            return []

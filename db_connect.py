@@ -9,14 +9,13 @@ DB_NAME = os.getenv("DB_NAME")
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_HOST = os.getenv("DB_HOST")
-DB_PORT = int(os.getenv("DB_PORT", 5432))  # تبدیل به عدد
+DB_PORT = os.getenv("DB_PORT")
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s | %(levelname)s: %(message)s",
 )
 db_logger = logging.getLogger("Database")
-
 
 class PostgresConnection:
     def __enter__(self):
@@ -37,9 +36,9 @@ class PostgresConnection:
             raise e
 
     def __exit__(self, exc_type, exc_value, traceback):
-        if hasattr(self, "cur") and self.cur:
+        if self.cur:
             self.cur.close()
-        if hasattr(self, "con") and self.con:
+        if self.con:
             self.con.close()
         db_logger.info("Connection closed.")
 
@@ -53,7 +52,7 @@ class PostgresConnection:
                     email VARCHAR(100) UNIQUE NOT NULL,
                     password VARCHAR(100) NOT NULL,
                     is_admin BOOLEAN DEFAULT FALSE,
-                    wallet DECIMAL(10, 2) DEFAULT 0.0
+                    wallet DECIMAL(10,2) DEFAULT 0.0
                 )
             """)
             # BUSES
@@ -63,10 +62,10 @@ class PostgresConnection:
                     bus_name VARCHAR(100) NOT NULL,
                     bus_number VARCHAR(50) UNIQUE NOT NULL,
                     total_seats INTEGER NOT NULL,
-                    ticket_price DECIMAL(10,2) NOT NULL,
+                    price_per_seat DECIMAL(10,2) NOT NULL,
                     departure_time VARCHAR(50),
                     arrival_time VARCHAR(50),
-                    route VARCHAR(255)
+                    route VARCHAR(200)
                 )
             """)
             # SEATS
@@ -87,13 +86,34 @@ class PostgresConnection:
                     bus_id INTEGER REFERENCES buses(bus_id) ON DELETE CASCADE,
                     seat_id INTEGER REFERENCES seats(seat_id) ON DELETE CASCADE,
                     purchase_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    price DECIMAL(10, 2) NOT NULL
+                    price DECIMAL(10,2) NOT NULL,
+                    status VARCHAR(20) DEFAULT 'PAID'
                 )
             """)
-            self.con.commit()
-            db_logger.info("Tables created successfully.")
+            # TRANSACTIONS
+            self.cur.execute("""
+                CREATE TABLE IF NOT EXISTS transactions (
+                    transaction_id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(user_id),
+                    type VARCHAR(20),
+                    amount DECIMAL(10,2),
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            # AUDIT LOG
+            self.cur.execute("""
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    log_id SERIAL PRIMARY KEY,
+                    actor_id INTEGER REFERENCES users(user_id),
+                    action TEXT NOT NULL,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
 
-            # Default admin
+            self.con.commit()
+            print("Tables created successfully.")
+
+            # ایجاد ادمین پیش‌فرض
             self.cur.execute("SELECT * FROM users WHERE email = 'admin@admin.com'")
             if not self.cur.fetchone():
                 self.cur.execute("""
@@ -101,15 +121,14 @@ class PostgresConnection:
                     VALUES (%s, %s, %s, %s, %s)
                 """, ("Admin", "admin@admin.com", "admin123", True, 0))
                 self.con.commit()
-                db_logger.info("Default admin created: admin@admin.com / admin123")
-
+                print("Default admin created: admin@admin.com / admin123")
         except Exception as e:
-            db_logger.error(f"Error creating tables: {e}")
+            print(f"Error creating Tables: {e}")
             self.con.rollback()
 
+    # --- Query Helpers ---
     def execute_query(self, query, params=None):
         try:
-            db_logger.info(f"Executing query: {query}")
             if params:
                 self.cur.execute(query, params)
             else:
@@ -119,13 +138,6 @@ class PostgresConnection:
             db_logger.error(f"Error executing query: {e}")
             return False
 
-    def commit(self):
-        if hasattr(self, "con") and self.con:
-            self.con.commit()
-            db_logger.info("Data committed!")
-        else:
-            db_logger.error("Connection does not exist!")
-
     def fetch_one(self, query, params=None):
         try:
             if params:
@@ -134,7 +146,7 @@ class PostgresConnection:
                 self.cur.execute(query)
             return self.cur.fetchone()
         except Exception as e:
-            db_logger.error(f"Error fetching data: {e}")
+            print(f"Error fetching data: {e}")
             return None
 
     def fetch_all(self, query, params=None):
@@ -145,5 +157,25 @@ class PostgresConnection:
                 self.cur.execute(query)
             return self.cur.fetchall()
         except Exception as e:
-            db_logger.error(f"Error fetching data: {e}")
+            print(f"Error fetching data: {e}")
             return []
+
+    def commit(self):
+        try:
+            self.con.commit()
+        except Exception as e:
+            print(f"Error committing: {e}")
+
+    def rollback(self):
+        try:
+            self.con.rollback()
+        except Exception as e:
+            print(f"Error rolling back: {e}")
+
+    # --- Audit Log Helper ---
+    def log_action(self, actor_id, action):
+        self.execute_query(
+            "INSERT INTO audit_log (actor_id, action) VALUES (%s, %s)",
+            (actor_id, action)
+        )
+        self.commit()
