@@ -8,8 +8,8 @@ from audit_log import AuditLogger
 
 
 class BusReservationSystem:
-    def __init__(self):
-        self.db = PostgresConnection()
+    def __init__(self, db):
+        self.db = db
         self.user_manager = UserManager(self.db)
         self.bus_manager = BusManager(self.db)
         self.ticket_manager = TicketManager(self.db)
@@ -22,12 +22,11 @@ class BusReservationSystem:
     def login(self, email, password):
         return self.user_manager.login_user(email, password)
 
-    def add_bus(self, name, number, seats, price, dep, arr, route):
-        self.bus_manager.add_bus(name, number, seats, price, dep, arr, route)
-        self.audit.log("ADMIN", f"Bus added: {name} ({number})")
+    def add_bus(self, admin_id, name, number, seats, price, dep, arr, route):
+        self.bus_manager.add_bus(admin_id, name, number, seats, price, dep, arr, route)
+        self.audit.log(admin_id , f"Bus added: {name} ({number})")
 
     def book_ticket(self, user_id, bus_id, seat_number):
-        # بررسی موجودی و خرید بلیط
         buses = self.bus_manager.get_all_buses()
         bus = next((b for b in buses if b["bus_id"] == bus_id), None)
         if not bus:
@@ -70,28 +69,24 @@ class BusReservationSystem:
                   f"Seats: {b['available_seats']}/{b['total_seats']} | Price: ${b['price_per_seat']:.2f}")
 
     def show_income_report(self, bus_id=None):
-        """نمایش درآمد کل یا درآمد یک سفر خاص"""
         if bus_id:
-            total = self.db.fetch_one("SELECT SUM(price) FROM tickets WHERE bus_id=%s AND status='PAID';", (bus_id,))
+            total = self.db.fetch_one(
+                "SELECT SUM(price) FROM tickets WHERE bus_id=%s AND status='PAID';", (bus_id,))
             print(f"💵 Total income for bus {bus_id}: ${total[0] if total and total[0] else 0:.2f}")
         else:
             total = self.db.fetch_one("SELECT SUM(price) FROM tickets WHERE status='PAID';")
             print(f"💵 Total terminal income: ${total[0] if total and total[0] else 0:.2f}")
 
     def show_stats(self):
-        """گزارش آمار"""
         trips = self.db.fetch_one("SELECT COUNT(*) FROM buses;")[0]
         tickets = self.db.fetch_one("SELECT COUNT(*) FROM tickets;")[0]
         print(f"📊 Total Trips: {trips}, Tickets Sold: {tickets}")
 
     def show_audit_log(self, limit=30):
-        """نمایش آخرین لاگ‌ها"""
         self.audit.show_logs(limit)
 
 
 def main():
-    system = BusReservationSystem()
-
     parser = argparse.ArgumentParser(description="🚌 Bus Reservation System CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -108,6 +103,7 @@ def main():
 
     # Add bus
     addbus = sub.add_parser("addbus", help="Add a new bus (admin only)")
+    addbus.add_argument("admin_id")
     addbus.add_argument("name")
     addbus.add_argument("number")
     addbus.add_argument("seats", type=int)
@@ -156,41 +152,45 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "register":
-        system.register(args.name, args.email, args.password)
+    # --- Use context manager for DB connection ---
+    with PostgresConnection() as db:
+        system = BusReservationSystem(db)
 
-    elif args.command == "login":
-        system.login(args.email, args.password)
+        if args.command == "register":
+            system.register(args.name, args.email, args.password)
 
-    elif args.command == "addbus":
-        system.add_bus(args.name, args.number, args.seats, args.price, args.departure, args.arrival, args.route)
+        elif args.command == "login":
+            system.login(args.email, args.password)
 
-    elif args.command == "book":
-        system.book_ticket(args.user_id, args.bus_id, args.seat_number)
+        elif args.command == "addbus":
+            system.add_bus(args.admin_id, args.name, args.number, args.seats, args.price, args.departure, args.arrival, args.route)
 
-    elif args.command == "cancel":
-        system.cancel_ticket(args.user_id, args.ticket_id)
+        elif args.command == "book":
+            system.book_ticket(args.user_id, args.bus_id, args.seat_number)
 
-    elif args.command == "addmoney":
-        system.add_money(args.user_id, args.amount)
+        elif args.command == "cancel":
+            system.cancel_ticket(args.user_id, args.ticket_id)
 
-    elif args.command == "balance":
-        system.show_balance(args.user_id)
+        elif args.command == "addmoney":
+            system.add_money(args.user_id, args.amount)
 
-    elif args.command == "transactions":
-        system.show_transactions(args.user_id)
+        elif args.command == "balance":
+            system.show_balance(args.user_id)
 
-    elif args.command == "buses":
-        system.show_buses()
+        elif args.command == "transactions":
+            system.show_transactions(args.user_id)
 
-    elif args.command == "report":
-        system.show_income_report(args.bus)
+        elif args.command == "buses":
+            system.show_buses()
 
-    elif args.command == "stats":
-        system.show_stats()
+        elif args.command == "report":
+            system.show_income_report(args.bus)
 
-    elif args.command == "audit":
-        system.show_audit_log(args.limit)
+        elif args.command == "stats":
+            system.show_stats()
+
+        elif args.command == "audit":
+            system.show_audit_log(args.limit)
 
 
 if __name__ == "__main__":

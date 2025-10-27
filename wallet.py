@@ -27,7 +27,7 @@ class WalletManager:
         self.db.execute_query(query)
         self.db.commit()
 
-    def add_balance(self, user_id: int, amount: float, description: str = "Wallet deposit") -> bool:
+    def add_balance(self, user_id: int,  amount: float, type: str = "Wallet deposit") -> bool:
         """افزایش موجودی کیف پول و ثبت تراکنش"""
         if amount <= 0:
             print("Amount must be positive.")
@@ -46,12 +46,12 @@ class WalletManager:
 
             # ثبت تراکنش
             self.db.execute_query(
-                "INSERT INTO transactions (user_id, amount, transaction_type, description) VALUES (%s, %s, %s, %s);",
-                (user_id, amount, 'DEPOSIT', description)
+                "INSERT INTO transactions (user_id, type, amount) VALUES (%s, %s, %s);",
+                (user_id, type, amount)
             )
 
             self.db.commit()
-            self.audit.log(user_id, f"Deposit: +{amount:.2f} ({description})")
+            self.audit.log(user_id, f"Deposit: +{amount:.2f} ({type})")
             print(f"✅ Added ${amount:.2f} to user {user_id} wallet.")
             return True
         except Exception as e:
@@ -95,7 +95,7 @@ class WalletManager:
 
             # ثبت تراکنش (ثبت مقدار مثبت یا منفی بستگی به سیاست شما دارد؛ اینجا مثبت ذخیره می‌کنیم و نوع را مشخص می‌کنیم)
             self.db.execute_query(
-                "INSERT INTO transactions (user_id, amount, transaction_type, description) VALUES (%s, %s, %s, %s);",
+                "INSERT INTO transactions (user_id, type, amount) VALUES (%s, %s, %s);",
                 (user_id, -abs(amount), 'TICKET_PURCHASE', description)
             )
 
@@ -124,7 +124,7 @@ class WalletManager:
                 return False
 
             self.db.execute_query(
-                "INSERT INTO transactions (user_id, amount, transaction_type, description) VALUES (%s, %s, %s, %s);",
+                "INSERT INTO transactions (user_id, type, amount) VALUES (%s, %s, %s);",
                 (user_id, amount, 'REFUND', description)
             )
 
@@ -153,7 +153,7 @@ class WalletManager:
         """نمایش تاریخچه تراکنش‌ها"""
         try:
             rows = self.db.fetch_all(
-                "SELECT transaction_id, amount, transaction_type, description, created_at FROM transactions WHERE user_id = %s ORDER BY created_at DESC LIMIT %s;",
+                "SELECT transaction_id, type, amount, timestamp FROM transactions WHERE user_id = %s ORDER BY timestamp DESC LIMIT %s;",
                 (user_id, limit)
             )
             if not rows:
@@ -162,8 +162,8 @@ class WalletManager:
 
             print(f"\n📜 Transactions for user {user_id}:")
             print("-" * 80)
-            for t_id, amount, t_type, desc, created in rows:
-                print(f"[{created}] ({t_type}) {amount:.2f} — {desc} (id={t_id})")
+            for t_id, t_type, amount, created in rows:
+                print(f"[{created}] ({t_type}) {amount:.2f} (id={t_id})")
             print("-" * 80)
         except Exception as e:
             print(f"Error showing transactions: {e}")

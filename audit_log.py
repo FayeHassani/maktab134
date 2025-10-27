@@ -18,15 +18,15 @@ class AuditLogger:
         self.db.execute_query(query)
         self.db.commit()
 
-    def log(self, actor, action):
+    def log(self, actor_id, action):
         """
         ثبت یک رویداد در جدول لاگ
         :param actor: کاربری که عملیات را انجام داده (user_id یا admin)
         :param action: توضیح عملیات انجام شده
         """
         try:
-            query = "INSERT INTO audit_log (actor, action, timestamp) VALUES (%s, %s, %s)"
-            self.db.execute_query(query, (str(actor), action, datetime.now()))
+            query = "INSERT INTO audit_log (actor_id, action, timestamp) VALUES (%s, %s, %s)"
+            self.db.execute_query(query, (actor_id, action, datetime.now()))
             self.db.commit()
         except Exception as e:
             print(f"[AuditLog Error] Failed to log action: {e}")

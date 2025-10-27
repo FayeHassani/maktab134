@@ -165,7 +165,7 @@ class BusManager:
     def get_available_seats(self, bus_id):
         try:
             query = "SELECT seat_id, seat_number FROM seats WHERE bus_id=%s AND is_booked=FALSE ORDER BY seat_number"
-            results = self.db.fetch_all(query)
+            results = self.db.fetch_all(query, (bus_id,))
             return [{"seat_id": s_id, "seat_number": num} for s_id, num in results]
         except Exception as e:
             print(f"Error fetching seats: {e}")
