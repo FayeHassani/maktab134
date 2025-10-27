@@ -1,4 +1,3 @@
-# wallet.py
 from datetime import datetime
 from audit_log import AuditLogger
 
