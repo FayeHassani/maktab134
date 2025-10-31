@@ -1,80 +1,69 @@
 from db_connect import PostgresConnection
 import datetime
+from db_connect import db_logger
+from bus import BusManager
+from wallet import WalletManager
 
 class TicketManager:
     def __init__(self, db: PostgresConnection):
         self.db = db
 
-    # خرید بلیط با تراکنش امن و ثبت تراکنش کیف پول
     def buy_ticket(self, user_id, bus_id, seat_id, price):
         try:
-            # شروع تراکنش
-            self.db.cur.execute("BEGIN;")
-
-            # قفل کردن موجودی کاربر
+            # lock wallet
             wallet_result = self.db.fetch_one(
                 "SELECT wallet FROM users WHERE user_id=%s FOR UPDATE",
                 (user_id,)
             )
             if not wallet_result:
-                print("User not found!")
+                db_logger.info("User not found!")
                 self.db.rollback()
                 return False
 
             wallet = float(wallet_result[0])
             if wallet < price:
-                print("Insufficient balance!")
+                db_logger.error("Insufficient balance!")
                 self.db.rollback()
                 return False
 
-            # بررسی وضعیت صندلی
+            #check if seat is available
             seat_result = self.db.fetch_one(
                 "SELECT is_booked FROM seats WHERE seat_id=%s FOR UPDATE",
                 (seat_id,)
             )
             if not seat_result:
-                print("Seat not found!")
+                db_logger.info("Seat not found!")
                 self.db.rollback()
                 return False
 
             if seat_result[0]:
-                print("Seat already booked!")
+                db_logger.info("Seat already booked!")
                 self.db.rollback()
                 return False
 
-            # رزرو صندلی
-            self.db.execute_query(
-                "UPDATE seats SET is_booked=TRUE WHERE seat_id=%s",
-                (seat_id,)
-            )
+            #reserve seat
+            bus_manager = BusManager(self.db)
+            bus_manager.reserve_seat(seat_id)
+            
+            # wallet deduction
+            wallet_manager = WalletManager(self.db)
+            wallet_manager.deduct_balance(user_id, price, type= "Ticket purchase")
 
-            # کسر از کیف پول
-            self.db.execute_query(
-                "UPDATE users SET wallet=wallet-%s WHERE user_id=%s",
-                (price, user_id)
-            )
-
-            # ثبت تراکنش
-            self.db.execute_query(
-                "INSERT INTO transactions (user_id,type,amount) VALUES (%s,%s,%s)",
-                (user_id, "BUY_TICKET", price)
-            )
-
-            # ثبت بلیط
+            # log ticket
             self.db.execute_query(
                 "INSERT INTO tickets (user_id,bus_id,seat_id,price,status) VALUES (%s,%s,%s,%s,'PAID')",
                 (user_id, bus_id, seat_id, price)
             )
 
             self.db.commit()
-            print(f"Ticket purchased successfully! Remaining balance: ${wallet - price:.2f}")
+            db_logger.info(f"Ticket purchased successfully! Remaining balance: ${wallet - price:.2f}")
             return True
-        except Exception as e:
-            print(f"Error buying ticket: {e}")
+        except Exception:
+            db_logger.exception(f"Error buying ticket")
             self.db.rollback()
             return False
 
-    # لغو بلیط
+    # Cancel ticket
     def cancel_ticket(self, user_id, ticket_id, refund_percent=80):
         try:
             ticket = self.db.fetch_one(
@@ -82,46 +71,39 @@ class TicketManager:
                 (ticket_id, user_id)
             )
             if not ticket:
-                print("Ticket not found!")
+                db_logger.info("Ticket not found")
                 return False
 
             status, price, seat_id = ticket
             if status != "PAID":
-                print("Ticket cannot be cancelled!")
+                db_logger.error("Ticket cannot be cancelled!")
                 return False
 
-            refund_amount = price * refund_percent / 100
+            refund_amount = float(price) * refund_percent / 100
 
-            # بروزرسانی وضعیت بلیط و صندلی
+            # Update ticket
             self.db.execute_query(
                 "UPDATE tickets SET status='CANCELLED' WHERE ticket_id=%s",
                 (ticket_id,)
             )
+            # Update seat
             self.db.execute_query(
                 "UPDATE seats SET is_booked=FALSE WHERE seat_id=%s",
                 (seat_id,)
             )
 
-            # بازگرداندن مبلغ به کیف پول
-            self.db.execute_query(
-                "UPDATE users SET wallet=wallet+%s WHERE user_id=%s",
-                (refund_amount, user_id)
-            )
-            # ثبت تراکنش
-            self.db.execute_query(
-                "INSERT INTO transactions (user_id,type,amount) VALUES (%s,%s,%s)",
-                (user_id, "REFUND", refund_amount)
-            )
-
+            # Refund amount
+            wallet_manager = WalletManager(self.db)
+            wallet_manager.refund_balance(user_id, refund_amount, type="Ticket refund")
+           
             self.db.commit()
-            print(f"Ticket cancelled. Refund: ${refund_amount:.2f}")
+            db_logger.info(f"Ticket cancelled. Refund: ${refund_amount:.2f}")
             return True
-        except Exception as e:
-            print(f"Error cancelling ticket: {e}")
+        except Exception:
+            db_logger.exception("Error cancelling ticket")
             self.db.rollback()
             return False
 
-    # مشاهده بلیط‌های کاربر
     def get_user_tickets(self, user_id):
         try:
             query = """
@@ -150,6 +132,6 @@ class TicketManager:
                     "route": route
                 })
             return tickets
-        except Exception as e:
-            print(f"Error fetching tickets: {e}")
+        except Exception:
+            db_logger.exception("Error fetching tickets")
             return []

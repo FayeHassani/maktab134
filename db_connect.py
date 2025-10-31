@@ -109,22 +109,36 @@ class PostgresConnection:
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-
+            # REPORTS
+            self.cur.execute("""
+                CREATE TABLE IF NOT EXISTS reports (
+                    report_id SERIAL PRIMARY KEY,
+                    report_type VARCHAR(50),
+                    generated_by INTEGER REFERENCES users(user_id),
+                    generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    details TEXT
+                )
+            """)
             self.con.commit()
-            print("Tables created successfully.")
+            db_logger.info ("Tables successfully created.")
+
+        except Exception as e:
+            db_logger.error(f"Error creating tabels: {e}")
+            raise e
 
             # ایجاد ادمین پیش‌فرض
             self.cur.execute("SELECT * FROM users WHERE email = 'admin@admin.com'")
             if not self.cur.fetchone():
-                self.cur.execute("""
-                    INSERT INTO users (name, email, password, is_admin, wallet)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, ("Admin", "admin@admin.com", "admin123", True, 0))
-                self.con.commit()
-                print("Default admin created: admin@admin.com / admin123")
-        except Exception as e:
-            print(f"Error creating Tables: {e}")
-            self.con.rollback()
+                try:
+                    self.cur.execute("""
+                        INSERT INTO users (name, email, password, is_admin, wallet)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, ("Admin", "admin@admin.com", "admin123", True, 0))
+                    self.con.commit()
+                    db_logger.info("Default admin created: admin@admin.com")
+                except Exception as e:
+                    self.con.rollback()
+                    db_logger.info("Error creating default admin!")
 
     # --- Query Helpers ---
     def execute_query(self, query, params=None):
@@ -145,8 +159,8 @@ class PostgresConnection:
             else:
                 self.cur.execute(query)
             return self.cur.fetchone()
-        except Exception as e:
-            print(f"Error fetching data: {e}")
+        except Exception:
+            db_logger.error("Error fetching data", exc_info=True)
             return None
 
     def fetch_all(self, query, params=None):
@@ -156,26 +170,20 @@ class PostgresConnection:
             else:
                 self.cur.execute(query)
             return self.cur.fetchall()
-        except Exception as e:
-            print(f"Error fetching data: {e}")
+        except Exception:
+            db_logger.error("Error fetching data", exc_info= True)
             return []
 
     def commit(self):
         try:
             self.con.commit()
-        except Exception as e:
-            print(f"Error committing: {e}")
+        except Exception:
+            db_logger.error("Error commiting", exc_info=True)
 
     def rollback(self):
         try:
             self.con.rollback()
-        except Exception as e:
-            print(f"Error rolling back: {e}")
+        except Exception:
+            db_logger.error("Error rolling back", exc_info= True)
 
-    # --- Audit Log Helper ---
-    def log_action(self, actor_id, action):
-        self.execute_query(
-            "INSERT INTO audit_log (actor_id, action) VALUES (%s, %s)",
-            (actor_id, action)
-        )
-        self.commit()
+   
